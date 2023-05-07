@@ -1,44 +1,54 @@
 use anchor_lang::prelude::*;
 
-declare_id!("SwapTOken");
+#[derive(Accounts)]
+pub struct Swap {
+    #[account(mut)]
+    authority: AccountInfo<'info>,
+    #[account(mut)]
+    move_token_account: AccountInfo<'info>,
+    #[account(mut)]
+    sol_token_account: AccountInfo<'info>,
+    #[account(zero)]
+    fee_account: AccountInfo<'info>,
+    #[account(mut)]
+    swap_state: AccountInfo<'info, SwapState>,
+}
 
-#[program]
-pub mod my_project {
-    use super::*;
+#[derive(BorshDeserialize, BorshSerialize)]
+pub struct SwapState {
+    move_supply: u64,
+    sol_supply: u64,
+    fee_rate: u64,
+}
 
-    pub fn create_account(ctx: Context<CreateAccount>) -> ProgramResult {
-        let account = ctx.accounts.account;
-        account.data.initialize(&mut ctx.banks_mut());
+impl Swap {
+    pub fn deposit_move(&mut self, amount: u64) -> DispatchResult {
+        self.move_token_account.lamports += amount;
+        self.swap_state.move_supply += amount;
         Ok(())
     }
 
-    pub fn transfer(ctx: Context<Transfer>) -> ProgramResult {
-        let from_account = ctx.accounts.from_account;
-        let to_account = ctx.accounts.to_account;
-        let amount = from_account.data.amount;
-        to_account.data.add_amount(amount);
-        from_account.data.subtract_amount(amount);
+    pub fn deposit_sol(&mut self, amount: u64) -> DispatchResult {
+        self.sol_token_account.lamports += amount;
+        self.swap_state.sol_supply += amount;
         Ok(())
     }
-}
 
-#[derive(Accounts)]
-pub struct CreateAccount<'a> {
-    #[account(mut)]
-    pub account: Account<'a, MyAccount>,
-    pub system_program: Sysvar<'a, System>,
-}
+    pub fn swap_move_for_sol(&mut self, amount: u64) -> DispatchResult {
+        let sol_amount = amount / self.swap_state.fee_rate;
+        self.sol_token_account.lamports -= sol_amount;
+        self.move_token_account.lamports += amount;
+        self.swap_state.move_supply -= amount;
+        self.swap_state.sol_supply += sol_amount;
+        Ok(())
+    }
 
-#[derive(Accounts)]
-pub struct Transfer<'a> {
-    #[account(mut)]
-    pub from_account: Account<'a, MyAccount>,
-    #[account(mut)]
-    pub to_account: Account<'a, MyAccount>,
-    pub system_program: Sysvar<'a, System>,
-}
-
-#[derive(Debug, Default)]
-pub struct MyAccount {
-    pub amount: u64,
+    pub fn swap_sol_for_move(&mut self, amount: u64) -> DispatchResult {
+        let move_amount = amount * self.swap_state.fee_rate;
+        self.move_token_account.lamports -= move_amount;
+        self.sol_token_account.lamports += amount;
+        self.swap_state.move_supply += move_amount;
+        self.swap_state.sol_supply -= amount;
+        Ok(())
+    }
 }

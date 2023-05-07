@@ -1,106 +1,100 @@
 use anchor_lang::prelude::*;
+use solana_sdk::{
+    account::Account,
+    pubkey::Pubkey,
+    system_program::SystemProgram,
+    transaction::Transaction,
+};
 
-use crate::{Swap, SwapState};
-
-#[test]
-fn test_initialize() {
-    let mut program = Program::new("swap", None);
-
-    // Create the authority account.
-    let authority = Keypair::new();
-
-    // Create the move token account.
-    let move_token_account = Keypair::new();
-
-    // Create the sol token account.
-    let sol_token_account = Keypair::new();
-
-    // Create the fee account.
-    let fee_account = Keypair::new();
-
-    // Create the swap state account.
-    let swap_state_account = Keypair::new();
-
-    // Create the context.
-    let mut context = Context::new(&program, &authority);
-    context.accounts.authority = authority;
-    context.accounts.move_token_account = move_token_account;
-    context.accounts.sol_token_account = sol_token_account;
-    context.accounts.fee_account = fee_account;
-    context.accounts.swap_state = swap_state_account;
-
-    // Initialize the swap.
-    let res = program.initialize(&mut context);
-    assert_ok!(res);
-
-    // Check that the swap state was initialized correctly.
-    let swap_state = SwapState::load(&mut context.accounts.swap_state)?;
-    assert_eq!(swap_state.move_supply, 0);
-    assert_eq!(swap_state.sol_supply, 0);
-    assert_eq!(swap_state.fee_rate, 1000);
+#[derive(Accounts)]
+pub struct SwapInstructionArgs {
+    #[account(mut)]
+    pub payer: AccountInfo<'info>,
+    #[account(mut)]
+    pub swap_source: AccountInfo<'info>,
+    #[account(mut)]
+    pub swap_destination: AccountInfo<'info>,
+    #[account(mut)]
+    pub fee_account: AccountInfo<'info>,
+    #[account(address = SystemProgram::id())]
+    pub system_program: AccountInfo<'info>,
 }
 
-#[test]
-fn test_deposit_move() {
-    let mut program = Program::new("swap", None);
+#[program]
+pub mod my_token_swap {
+    use super::*;
 
-    // Create the authority account.
-    let authority = Keypair::new();
+    pub const SWAP_INSTRUCTION_ID: InstructionId = 5;
 
-    // Create the move token account.
-    let move_token_account = Keypair::new();
+    pub fn swap(ctx: Context<SwapInstructionArgs>, amount: u64, token: String) -> ProgramResult {
+        // Check if the payer has enough funds to cover the swap.
+        let payer_balance = ctx.accounts.payer.lamports();
+        if payer_balance < amount {
+            return Err(ProgramError::InsufficientFunds);
+        }
 
-    // Create the sol token account.
-    let sol_token_account = Keypair::new();
+        // Check if the swap source account has enough tokens to cover the swap.
+        let swap_source_balance = ctx.accounts.swap_source.load_len();
+        if swap_source_balance < amount {
+            return Err(ProgramError::InvalidAccountData);
+        }
 
-    // Create the fee account.
-    let fee_account = Keypair::new();
+        // Update the swap source account.
+        let new_swap_source_balance = swap_source_balance - amount;
+        ctx.accounts.swap_source.save_len(new_swap_source_balance);
 
-    // Create the swap state account.
-    let swap_state_account = Keypair::new();
+        // Deposit the swapped tokens into the swap destination account.
+        ctx.accounts.swap_destination.try_deposit(amount)?;
 
-    // Initialize the swap.
-    let res = program.initialize(&mut program.context, &authority);
-    assert_ok!(res);
+        // Send the fee to the fee account.
+        ctx.accounts.fee_account.try_deposit(amount / 10)?;
 
-    // Deposit 10 MOVE tokens.
-    let amount = 10;
-    let mut context = program.context.clone();
-    context.accounts.move_token_account = move_token_account;
-    res = program.deposit_move(&mut context, &authority, amount);
-    assert_ok!(res);
-
-    // Check that the move supply was increased correctly.
-    let swap_state = SwapState::load(&mut context.accounts.swap_state)?;
-    assert_eq!(swap_state.move_supply, amount);
+        Ok(())
+    }
 }
 
-#[test]
-fn test_deposit_sol() {
-    let mut program = Program::new("swap", None);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use solana_sdk::{
+        instruction::Instruction,
+        native::system_instruction::create_account,
+        signature::Signer,
+        transaction::Transaction,
+    };
 
-    // Create the authority account.
-    let authority = Keypair::new();
+    #[test]
+    fn test_swap() {
+        // Create the program signer.
+        let program_id = Pubkey::new_from_array([1; 32]);
+        let signer = Signer::new(&program_id);
 
-    // Create the move token account.
-    let move_token_account = Keypair::new();
+        // Create the accounts.
+        let payer_account = AccountInfo::new(Pubkey::new_from_array([2; 32]));
+        let swap_source_account = AccountInfo::new(Pubkey::new_from_array([3; 32]));
+        let swap_destination_account = AccountInfo::new(Pubkey::new_from_array([4; 32]));
+        let fee_account = AccountInfo::new(Pubkey::new_from_array([5; 32]));
 
-    // Create the sol token account.
-    let sol_token_account = Keypair::new();
+        // Create the transaction.
+        let mut transaction = Transaction::new_with_payer(
+            &Instruction::new_with_accounts(
+                SWAP_INSTRUCTION_ID,
+                &program_id,
+                vec![payer_account, swap_source_account, swap_destination_account, fee_account],
+                vec![],
+            ),
+            payer_account,
+            1000000,
+        );
 
-    // Create the fee account.
-    let fee_account = Keypair::new();
+        // Sign the transaction.
+        transaction.sign(&signer, signer.keypair().secret());
 
-    // Create the swap state account.
-    let swap_state_account = Keypair::new();
+        // Submit the transaction to the cluster.
+        let response = solana_sdk::rpc::submit_transaction_with_confirmations(transaction, 1).unwrap();
 
-    // Initialize the swap.
-    let res = program.initialize(&mut program.context, &authority);
-    assert_ok!(res);
-
-    // Deposit 1 SOL.
-    let amount = 1_000_000_000;
-    let mut context = program.context.clone();
-    context.accounts.sol_token_account = sol_token_account;
-    res = program.deposit_sol(&mut context, &authority, amount);
-    assert_ok!(res
+        // Check the transaction status.
+        let status = response.transaction_status();
+        assert_eq!(status, TransactionStatus::Success);
+    }
+}

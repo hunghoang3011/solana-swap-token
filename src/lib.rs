@@ -1,54 +1,54 @@
 use anchor_lang::prelude::*;
+use solana_sdk::{
+    account::Account,
+    pubkey::Pubkey,
+    system_program::SystemProgram,
+    transaction::Transaction,
+};
 
 #[derive(Accounts)]
-pub struct Swap {
+pub struct SwapInstructionArgs {
     #[account(mut)]
-    authority: AccountInfo<'info>,
+    pub payer: AccountInfo<'info>,
     #[account(mut)]
-    move_token_account: AccountInfo<'info>,
+    pub swap_source: AccountInfo<'info>,
     #[account(mut)]
-    sol_token_account: AccountInfo<'info>,
-    #[account(zero)]
-    fee_account: AccountInfo<'info>,
+    pub swap_destination: AccountInfo<'info>,
     #[account(mut)]
-    swap_state: AccountInfo<'info, SwapState>,
+    pub fee_account: AccountInfo<'info>,
+    #[account(address = SystemProgram::id())]
+    pub system_program: AccountInfo<'info>,
 }
 
-#[derive(BorshDeserialize, BorshSerialize)]
-pub struct SwapState {
-    move_supply: u64,
-    sol_supply: u64,
-    fee_rate: u64,
-}
+#[program]
+pub mod my_token_swap {
+    use super::*;
 
-impl Swap {
-    pub fn deposit_move(&mut self, amount: u64) -> DispatchResult {
-        self.move_token_account.lamports += amount;
-        self.swap_state.move_supply += amount;
-        Ok(())
-    }
+    pub const SWAP_INSTRUCTION_ID: InstructionId = 0;
 
-    pub fn deposit_sol(&mut self, amount: u64) -> DispatchResult {
-        self.sol_token_account.lamports += amount;
-        self.swap_state.sol_supply += amount;
-        Ok(())
-    }
+    pub fn swap(ctx: Context<SwapInstructionArgs>, amount: u64, token: String) -> ProgramResult {
+        // Check if the payer has enough funds to cover the swap.
+        let payer_balance = ctx.accounts.payer.lamports();
+        if payer_balance < amount {
+            return Err(ProgramError::InsufficientFunds);
+        }
 
-    pub fn swap_move_for_sol(&mut self, amount: u64) -> DispatchResult {
-        let sol_amount = amount / self.swap_state.fee_rate;
-        self.sol_token_account.lamports -= sol_amount;
-        self.move_token_account.lamports += amount;
-        self.swap_state.move_supply -= amount;
-        self.swap_state.sol_supply += sol_amount;
-        Ok(())
-    }
+        // Check if the swap source account has enough tokens to cover the swap.
+        let swap_source_balance = ctx.accounts.swap_source.load_len();
+        if swap_source_balance < amount {
+            return Err(ProgramError::InvalidAccountData);
+        }
 
-    pub fn swap_sol_for_move(&mut self, amount: u64) -> DispatchResult {
-        let move_amount = amount * self.swap_state.fee_rate;
-        self.move_token_account.lamports -= move_amount;
-        self.sol_token_account.lamports += amount;
-        self.swap_state.move_supply += move_amount;
-        self.swap_state.sol_supply -= amount;
+        // Update the swap source account.
+        let new_swap_source_balance = swap_source_balance - amount;
+        ctx.accounts.swap_source.save_len(new_swap_source_balance);
+
+        // Deposit the swapped tokens into the swap destination account.
+        ctx.accounts.swap_destination.try_deposit(amount)?;
+
+        // Send the fee to the fee account.
+        ctx.accounts.fee_account.try_deposit(amount / 10)?;
+
         Ok(())
     }
 }

@@ -10,7 +10,7 @@ pub mod swap {
         let mut state = SwapState::default();
         state.move_supply = 0;
         state.sol_supply = 0;
-        state.fee_rate = 1000; // 1% fee
+        state.fee_rate = 0; // 1% fee
         ctx.accounts.swap_state.save(&mut state)?;
         Ok(())
     }
